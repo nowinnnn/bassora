@@ -1,0 +1,61 @@
+name: Build and release
+
+on:
+  push:
+    tags: [ "v*" ]            # np. v0.4.0  ->  buduje i publikuje wydanie z instalatorem
+    branches: [ main, master ]   # każdy push na główną gałąź buduje instalator jako artefakt (bez wydania)
+  pull_request:
+  workflow_dispatch:          # ręczne uruchomienie z zakładki Actions
+
+permissions:
+  contents: write             # potrzebne do utworzenia Release
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: ver
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            V="${GITHUB_REF_NAME#v}"
+            echo "version=$V" >> "$GITHUB_OUTPUT"
+            echo "cmake_version=-DBASSORA_VERSION=$V" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=dev-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+            echo "cmake_version=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Configure
+        shell: pwsh
+        run: cmake -B build -G "Visual Studio 17 2022" -A x64 -DBASSORA_COPY_AFTER_BUILD=OFF ${{ steps.ver.outputs.cmake_version }}
+
+      - name: Build (Release)
+        shell: pwsh
+        run: cmake --build build --config Release --parallel
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup --no-progress -y
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DAppVersion=${{ steps.ver.outputs.version }}" installer\BASSORA.iss
+          Get-ChildItem dist
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: BASSORA-Setup-${{ steps.ver.outputs.version }}
+          path: dist/*.exe
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.exe
+          generate_release_notes: true
